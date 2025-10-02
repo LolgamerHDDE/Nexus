@@ -4,6 +4,7 @@ import os
 import random
 import dotenv
 import hashlib
+import aiomysql
 import requests
 
 dotenv.load_dotenv()
@@ -11,12 +12,41 @@ dotenv.load_dotenv()
 version = "2.0.0"
 PREMIUM_SKU = os.getenv("PREMIUM_SKU")
 
-intents = discord.Intents.all()
-bot = commands.Bot(command_prefix="!", intents=intents)
-tree = bot.tree
-
 def gravatar_hash(email: str) -> str:
     return hashlib.md5(email.strip().lower().encode("utf-8")).hexdigest()
+
+# Create DB pool once on startup
+
+async def create_db_pool():
+    bot.db = await aiomysql.create_pool(
+        host=os.getenv("DB_HOST"),
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASS"),
+        db=os.getenv("DB_NAME"),
+    )
+
+class MyBot(commands.Bot):
+    async def setup_hook(self):
+        # create DB pool before bot is ready
+        self.db = await aiomysql.create_pool(
+            host=os.getenv("DB_HOST"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASS"),
+            db=os.getenv("DB_NAME"),
+        )
+
+async def log_action(guild_id, action, target_id, moderator_id, reason):
+    async with bot.db.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("""
+                INSERT INTO moderation_logs (guild_id, action, target_id, moderator_id, reason)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (guild_id, action, target_id, moderator_id, reason))
+            await conn.commit()
+
+intents = discord.Intents.all()
+bot = MyBot(command_prefix="!", intents=intents)
+tree = bot.tree
 
 # Bot Events
 
@@ -145,31 +175,122 @@ async def gravatar(interaction: discord.Interaction, email: str):
 
 @bot.command(name="ban", help="Bans a user from the server.")
 @commands.has_permissions(ban_members=True)
-async def ban(interaction: discord.Interaction, member: discord.Member, *, reason=None):
+async def ban(ctx, member: discord.Member, *, reason=None):
     try:
         await member.ban(reason=reason)
-        
-        embed = discord.Embed(title="User Banned", description=f"{member.mention} has been banned.\nRason: {reason}", color=0xFF0000)
-        private_embed = discord.Embed(title="You have been banned", description=f"You have been banned from {interaction.guild.name}.\nReason: {reason}", color=0xFF0000)
-        await member.send(embed=private_embed)
-        await interaction.response.send_message(embed=embed)
+
+        # Save to database
+        await log_action(ctx.guild.id, "ban", member.id, ctx.author.id, reason)
+
+        embed = discord.Embed(
+            title="User Banned",
+            description=f"{member.mention} has been banned.\nReason: {reason}",
+            color=0xFF0000
+        )
+        await ctx.send(embed=embed)
+        await member.send(f"You have been banned from {ctx.guild.name}.\nReason: {reason}")
     except Exception as e:
-        embed = discord.Embed(title="Error", description=f"Could not ban {member.mention}.\nError: {e}", color=0xFF0000)
-        await interaction.response.send_message(embed=embed)
+        await ctx.send(f"⚠️ Could not ban {member.mention}: {e}")
 
 @bot.command(name="kick", help="Kicks a user from the server.")
 @commands.has_permissions(kick_members=True)
-async def kick(interaction: discord.Interaction, member: discord.Member, *, reason=None):
+async def kick(ctx, member: discord.Member, *, reason=None):
     try:
         await member.kick(reason=reason)
-        
-        embed = discord.Embed(title="User Kicked", description=f"{member.mention} has been kicked.\nReason: {reason}", color=0xFFA500)
-        private_embed = discord.Embed(title="You have been kicked", description=f"You have been kicked from {interaction.guild.name}.\nReason: {reason}", color=0xFFA500)
-        await member.send(embed=private_embed)
-        await interaction.response.send_message(embed=embed)
+
+        # Save to database
+        await log_action(ctx.guild.id, "kick", member.id, ctx.author.id, reason)
+
+        embed = discord.Embed(
+            title="User Kicked",
+            description=f"{member.mention} has been kicked.\nReason: {reason}",
+            color=0xFFA500
+        )
+        await ctx.send(embed=embed)
+        await member.send(f"You have been kicked from {ctx.guild.name}.\nReason: {reason}")
     except Exception as e:
-        embed = discord.Embed(title="Error", description=f"Could not kick {member.mention}.\nError: {e}", color=0xFF0000)
-        await interaction.response.send_message(embed=embed)
+        await ctx.send(f"⚠️ Could not kick {member.mention}: {e}")
+
+@bot.command(name="warn", help="Warns a user and logs it to the database.")
+@commands.has_permissions(manage_messages=True)
+async def warn(ctx, member: discord.Member, *, reason=None):
+    try:
+        # Save to database
+        await log_action(ctx.guild.id, "warn", member.id, ctx.author.id, reason)
+
+        embed = discord.Embed(
+            title="User Warned",
+            description=f"{member.mention} has been warned.\nReason: {reason or 'No reason provided.'}",
+            color=0xFFFF00
+        )
+        await ctx.send(embed=embed)
+
+        # DM the user about the warning
+        private_embed = discord.Embed(
+            title="You have been warned",
+            description=f"You have been warned in **{ctx.guild.name}**.\nReason: {reason or 'No reason provided.'}",
+            color=0xFFFF00
+        )
+        await member.send(embed=private_embed)
+
+    except Exception as e:
+        await ctx.send(f"⚠️ Could not warn {member.mention}: {e}")
+
+@tree.command(name="logs", description="View moderation logs.")
+@commands.has_permissions(administrator=True)
+async def logs(interaction: discord.Interaction, member: discord.Member | None = None):
+    async with bot.db.acquire() as conn:
+        async with conn.cursor() as cur:
+            if member:  # Show logs for specific member
+                await cur.execute("""
+                    SELECT action, target_id, moderator_id, reason, timestamp 
+                    FROM moderation_logs
+                    WHERE guild_id = %s AND target_id = %s
+                    ORDER BY timestamp DESC
+                    LIMIT 10
+                """, (interaction.guild.id, member.id))
+            else:  # Show latest logs for the server
+                await cur.execute("""
+                    SELECT action, target_id, moderator_id, reason, timestamp 
+                    FROM moderation_logs
+                    WHERE guild_id = %s
+                    ORDER BY timestamp DESC
+                    LIMIT 10
+                """, (interaction.guild.id,))
+            rows = await cur.fetchall()
+
+    if not rows:
+        await interaction.response.send_message(
+            "📂 No moderation logs found.",
+            ephemeral=True
+        )
+        return
+
+    if member:
+        embed = discord.Embed(
+            title=f"Moderation Logs for {member}",
+            color=discord.Color.orange()
+        )
+    else:
+        embed = discord.Embed(
+            title=f"Recent Moderation Logs in {interaction.guild.name}",
+            color=discord.Color.orange()
+        )
+
+    for action, target_id, moderator_id, reason, timestamp in rows:
+        target = interaction.guild.get_member(target_id)
+        moderator = interaction.guild.get_member(moderator_id)
+
+        target_name = target.mention if target else f"ID {target_id}"
+        moderator_name = moderator.mention if moderator else f"ID {moderator_id}"
+
+        embed.add_field(
+            name=f"{action.upper()} • {timestamp.strftime('%Y-%m-%d %H:%M:%S')}",
+            value=f"👤 User: {target_name}\n👮 Moderator: {moderator_name}\n📄 Reason: {reason or 'No reason'}",
+            inline=False
+        )
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 if __name__ == "__main__":
     bot.run(token=os.getenv("DISCORD_BOT_TOKEN"))
