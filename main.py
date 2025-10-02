@@ -173,9 +173,9 @@ async def gravatar(interaction: discord.Interaction, email: str):
 
 # Moderation Commands
 
-@bot.command(name="ban", help="Bans a user from the server.")
+@tree.command(name="ban", description="Bans a user from the server.")
 @commands.has_permissions(ban_members=True)
-async def ban(ctx, member: discord.Member, *, reason=None):
+async def ban(ctx, member: discord.Member, *, reason: str | None = "No reason provided."):
     try:
         await member.ban(reason=reason)
 
@@ -192,9 +192,9 @@ async def ban(ctx, member: discord.Member, *, reason=None):
     except Exception as e:
         await ctx.send(f"⚠️ Could not ban {member.mention}: {e}")
 
-@bot.command(name="kick", help="Kicks a user from the server.")
+@tree.command(name="kick", description="Kicks a user from the server.")
 @commands.has_permissions(kick_members=True)
-async def kick(ctx, member: discord.Member, *, reason=None):
+async def kick(ctx, member: discord.Member, *, reason:str | None = "No reason provided."):
     try:
         await member.kick(reason=reason)
 
@@ -211,9 +211,9 @@ async def kick(ctx, member: discord.Member, *, reason=None):
     except Exception as e:
         await ctx.send(f"⚠️ Could not kick {member.mention}: {e}")
 
-@bot.command(name="warn", help="Warns a user and logs it to the database.")
+@tree.command(name="warn", description="Warns a user and logs it to the database.")
 @commands.has_permissions(manage_messages=True)
-async def warn(ctx, member: discord.Member, *, reason=None):
+async def warn(ctx, member: discord.Member, *, reason:str | None = "No reason provided."):
     try:
         # Save to database
         await log_action(ctx.guild.id, "warn", member.id, ctx.author.id, reason)
