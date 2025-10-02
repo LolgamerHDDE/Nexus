@@ -141,5 +141,35 @@ async def gravatar(interaction: discord.Interaction, email: str):
     except Exception as e:
         await interaction.followup.send(f"⚠️ Error fetching Gravatar profile: `{e}`")
 
+# Moderation Commands
+
+@bot.command(name="ban", help="Bans a user from the server.")
+@commands.has_permissions(ban_members=True)
+async def ban(interaction: discord.Interaction, member: discord.Member, *, reason=None):
+    try:
+        await member.ban(reason=reason)
+        
+        embed = discord.Embed(title="User Banned", description=f"{member.mention} has been banned.\nRason: {reason}", color=0xFF0000)
+        private_embed = discord.Embed(title="You have been banned", description=f"You have been banned from {interaction.guild.name}.\nReason: {reason}", color=0xFF0000)
+        await member.send(embed=private_embed)
+        await interaction.response.send_message(embed=embed)
+    except Exception as e:
+        embed = discord.Embed(title="Error", description=f"Could not ban {member.mention}.\nError: {e}", color=0xFF0000)
+        await interaction.response.send_message(embed=embed)
+
+@bot.command(name="kick", help="Kicks a user from the server.")
+@commands.has_permissions(kick_members=True)
+async def kick(interaction: discord.Interaction, member: discord.Member, *, reason=None):
+    try:
+        await member.kick(reason=reason)
+        
+        embed = discord.Embed(title="User Kicked", description=f"{member.mention} has been kicked.\nReason: {reason}", color=0xFFA500)
+        private_embed = discord.Embed(title="You have been kicked", description=f"You have been kicked from {interaction.guild.name}.\nReason: {reason}", color=0xFFA500)
+        await member.send(embed=private_embed)
+        await interaction.response.send_message(embed=embed)
+    except Exception as e:
+        embed = discord.Embed(title="Error", description=f"Could not kick {member.mention}.\nError: {e}", color=0xFF0000)
+        await interaction.response.send_message(embed=embed)
+
 if __name__ == "__main__":
     bot.run(token=os.getenv("DISCORD_BOT_TOKEN"))
